@@ -1,7 +1,6 @@
 import tkinter as tk
 import csv
 
-
 class Kontakt:
     def __init__(self,ime, email, telefon):
         self.ime=ime
@@ -110,3 +109,4 @@ if __name__ == '__main__':
     root = tk.Tk()
     app = ImenikApp(root)
     root.mainloop()
+
