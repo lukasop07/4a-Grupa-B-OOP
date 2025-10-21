@@ -54,9 +54,28 @@ class ImenikApp:
         self.ucitaj_kontakte()
 
     def dodaj_kontakt(self):
-        ime = self.entry_ime.get()
-        email = self.entry_email.get()
-        telefon = self.entry_telefon.get()
+        if len(self.entry_ime.get()) >=3:
+            ime = self.entry_ime.get()
+        else:
+            print('Nedovoljan broj znakova imena!')
+            ime=False
+
+        et=0
+        for i in self.entry_email.get():
+            if i=='@':
+                et=et+1
+
+        if et==1:
+            email = self.entry_email.get()
+        else:
+            print('Neispravan oblik emaila')
+            email=False
+
+        if len(self.entry_telefon.get()) == 10:
+            telefon = self.entry_telefon.get()
+        else:
+            print('Neispravan broj telefona')
+            telefon=False
 
         if not ime or not email or not telefon:
             print('Sva polja moraju biti popunjena!')
@@ -109,4 +128,3 @@ if __name__ == '__main__':
     root = tk.Tk()
     app = ImenikApp(root)
     root.mainloop()
-
