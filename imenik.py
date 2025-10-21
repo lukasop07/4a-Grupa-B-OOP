@@ -60,12 +60,7 @@ class ImenikApp:
             print('Nedovoljan broj znakova imena!')
             ime=False
 
-        et=0
-        for i in self.entry_email.get():
-            if i=='@':
-                et=et+1
-
-        if et==1:
+        if '@gmail.com' or '@skole.hr' in self.entry_email.get():
             email = self.entry_email.get()
         else:
             print('Neispravan oblik emaila')
