@@ -1,5 +1,5 @@
 #1 Nakon što ugasimo program ili računalo memorija spremljena u RAM-u se briše. Trajna pohrana nam omogućava trajno spremanje podataka.
-#2 CSV ima jednostavni tekstualni format i vrijednosti se odvajaju zarezima, dok XML ima hijerarhijsku strukturu i koristi tagove. XML se koristi za složenije strukture podataka, a CSV za tablične podatke.
+#2 CSV ima jednostavni tekstualni format i vrijednosti se odvajaju zarezima, dok XML ima hijerarhijsku strukturu i koristi tagove. XML se koristi za složenije strukture podataka, a CSV za tablične strukture podataka.
 #3 Ta konstrukcija automatski otvara i zatvara datoteku. Ako dođe do greške datoteka će se svejedno zatvoriti što je sigurnije od ručnog zatvaranja.
 #4 Kako se novi podatci nebi naljepljivali na stare.
 #5 csv.DictWriter/DictReader koristi nazive stupaca (ključeve) i redove pretvara u rječnike što omogućuje lakše korištenje te ima manju vjerojatnost pogreške od split(',').
@@ -194,3 +194,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = EvidencijaApp(root)
     root.mainloop()
+
