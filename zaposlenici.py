@@ -2,13 +2,11 @@
 
 class Zaposlenik:
     def __init__(self, ime, prezime, placa):
-        # Spremanje osnovnih podataka o zaposleniku
         self.ime = ime
         self.prezime = prezime
         self.placa = placa
 
     def prikazi_info(self):
-        # Ispis osnovnih informacija o zaposleniku
         print(f'Ime i prezime: {self.ime} {self.prezime}, Plaća: {self.placa} EUR')
 
 
@@ -62,3 +60,4 @@ if __name__ == "__main__":
     print("\n--- Dodavanje novog člana tima ---")
     m1.dodaj_clana_tima("Marko Markić")
     m1.prikazi_info()
+
