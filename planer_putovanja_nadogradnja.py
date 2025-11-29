@@ -1,12 +1,13 @@
-# 2. Planer putovanja (Naziv app: TravelBuddy)
-# Napravio: Luka Šop
+# 2. Planer putovanja (Naziv app: TravelBuddy) - ispravljena verzija (minimalni bugfix)
+# Napravio: Luka Šop (mali popravci od asistenta)
 
 #uvoz biblioteka
 import tkinter as tk
 from tkinter import ttk, messagebox
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import xml.etree.ElementTree as ET
 import os
+from collections import defaultdict
 
 #1. model OOP
 
@@ -82,8 +83,8 @@ class PlanerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Planer Putovanja - TravelBuddy")
-        self.geometry("850x520")
-        self.minsize(800,480)
+        self.geometry("950x560")
+        self.minsize(900,520)
 
         #paleta boja
         self.bg_color = "#00FFFF"
@@ -98,8 +99,14 @@ class PlanerApp(tk.Tk):
 
         #lista u koju se spremaju stavke
         self.stavke = []
-        # lista objekata koji su trenutno prikazani u listboxu (mapa index -> objekt)
+        # mapa iid -> objekt (za Treeview)
+        self.prikaz_map = {}
+        # lista objekata koji su trenutno prikazani u listboxu (redoslijed prikaza)
         self.prikaz_stavki = []
+
+        #održavanje sortiranja Treeview stupaca
+        self.tree_sort_column = None
+        self.tree_sort_reverse = False
 
         #meni, frameovi i statusna traka
         self.meni_traka()
@@ -110,22 +117,26 @@ class PlanerApp(tk.Tk):
         #update listboxa
         self.update_listbox()
 
+        # automatsko spremanje na izlaz (procedura za prozor)
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+
     #meni traka
-        #datoteka -> spremi, učitaj, izlaz
-        #pomoć -> o aplikaciji
     def meni_traka(self):
         meni = tk.Menu(self)
         datoteka = tk.Menu(meni, tearoff=0)
         datoteka.add_command(label="Spremi", command=self.save_xml)
         datoteka.add_command(label="Učitaj", command=self.load_xml)
         datoteka.add_separator()
-        # koristimo destroy umjesto quit da bi prozor bio pravilno zatvoren
         datoteka.add_command(label="Izlaz", command=self.destroy)
         meni.add_cascade(label="Datoteka", menu=datoteka)
 
         pomoć = tk.Menu(meni, tearoff=0)
         pomoć.add_command(label="O aplikaciji", command=self.o_aplikaciji)
         meni.add_cascade(label="Pomoć", menu=pomoć)
+
+        analitika = tk.Menu(meni, tearoff=0)
+        analitika.add_command(label="Analitika troškova", command=self.analitika_troskova_prozor)
+        meni.add_cascade(label="Analitika", menu=analitika)
 
         self.config(menu=meni)
 
@@ -215,28 +226,60 @@ class PlanerApp(tk.Tk):
         tk.Radiobutton(filteri, text="Aktivnost", variable=self.filter, value="Aktivnost", bg=self.bg_color, command=self.update_listbox).pack(side=tk.LEFT)
 
         save_gumb = tk.Button(filteri, text="Spremi", bg=self.button_color4, command=self.save_xml)
-        save_gumb.pack(side=tk.RIGHT, padx=4)
+        save_gumb.pack(side=tk.RIGHT)
         load_gumb = tk.Button(filteri, text="Učitaj",bg=self.button_color1, fg=self.text_color, command=self.load_xml)
-        load_gumb.pack(side=tk.RIGHT)
+        load_gumb.pack(side=tk.RIGHT, padx=8)
 
-        #lista stavki (itinerar)
+        # polje za pretragu po lokaciji (real-time)
+        tk.Label(filteri, text="Traži lokaciju:", bg=self.bg_color).pack(side=tk.LEFT, padx=(8,0))
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", lambda *args: self.update_listbox())
+        self.search_entry = tk.Entry(filteri, textvariable=self.search_var, width=18)
+        self.search_entry.pack(side=tk.LEFT, padx=(4,0))
+
+        #lista stavki (itinerar) - sad Treeview umjesto Listboxa
         listframe = tk.LabelFrame(right, text="Itinerar", bg=self.bg_color, padx=6, pady=6)
         listframe.pack(fill=tk.BOTH, expand=True)
 
-        self.listbox = tk.Listbox(listframe, activestyle='dotbox')
-        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.listbox.bind('<Double-1>', self.prikazi_detalje) #dupli klik na stavku prikazuje detalje
+        # Treeview s kolonama: Datum, Tip, Naziv, Lokacija, Cijena
+        columns = ("datum", "tip", "naziv", "lokacija", "cijena")
+        self.tree = ttk.Treeview(listframe, columns=columns, show="headings", selectmode="browse")
+        self.tree.heading("datum", text="Datum", command=lambda: self.tree_sort_by("datum"))
+        self.tree.heading("tip", text="Tip", command=lambda: self.tree_sort_by("tip"))
+        self.tree.heading("naziv", text="Naziv", command=lambda: self.tree_sort_by("naziv"))
+        self.tree.heading("lokacija", text="Lokacija", command=lambda: self.tree_sort_by("lokacija"))
+        self.tree.heading("cijena", text="Cijena (€)", command=lambda: self.tree_sort_by("cijena"))
 
-        scrollbar = tk.Scrollbar(listframe, command=self.listbox.yview)
+        # širine stupaca
+        self.tree.column("datum", width=160, anchor="w")
+        self.tree.column("tip", width=100, anchor="w")
+        self.tree.column("naziv", width=200, anchor="w")
+        self.tree.column("lokacija", width=150, anchor="w")
+        self.tree.column("cijena", width=100, anchor="e")
+
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.tree.bind("<Double-1>", self.prikazi_detalje_tree)  # dupli klik otvara detalje
+        # selekcija
+        self.tree.bind("<<TreeviewSelect>>", lambda e: None)
+
+        scrollbar = tk.Scrollbar(listframe, command=self.tree.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.listbox.config(yscrollcommand=scrollbar.set)
+        self.tree.config(yscrollcommand=scrollbar.set)
+
+        # definiraj tagove za boje redova
+        style = ttk.Style(self)
+        try:
+            self.tree.tag_configure("smjestaj", background="#DFF7FF")   # svijetlo plavo
+            self.tree.tag_configure("aktivnost", background="#E6FFE6")  # svijetlo zeleno
+        except Exception:
+            pass
 
         #gumbi za brisanje, izmjenu i detalje
         dno = tk.Frame(right, bg=self.bg_color)
         dno.pack(fill=tk.X, pady=(6,0))
 
         tk.Button(dno, text="Uredi odabrano", bg=self.button_color1, fg=self.text_color, command=self.ucitaj).pack(side=tk.RIGHT, padx=4)
-        tk.Button(dno, text="Prikaži detalje", bg=self.button_color2, fg=self.text_color, command=self.prikazi_detalje).pack(side=tk.RIGHT, padx=4)
+        tk.Button(dno, text="Prikaži detalje", bg=self.button_color2, fg=self.text_color, command=self.prikazi_detalje_tree).pack(side=tk.RIGHT, padx=4)
         tk.Button(dno, text="Obriši odabrano", bg=self.button_color3, fg=self.text_color, command=self.obrisi_odabrano).pack(side=tk.RIGHT)
 
     def promijeni_polja(self):
@@ -354,74 +397,150 @@ class PlanerApp(tk.Tk):
         self.update_listbox()
         self.status_set("Dodano: " + naziv)
 
-    # prikaz u listboxu
+    # prikaz u listboxu -> sada Treeview
     def update_listbox(self):
-        self.listbox.delete(0, tk.END)
-        self.listbox.selection_clear(0, tk.END)
+        # clear tree
+        for i in self.tree.get_children():
+            self.tree.delete(i)
+
         filt = self.filter.get()
-        
-        # sortiraj kronološki
+        search_text = self.search_var.get().strip().lower()
+
+        # sortiraj kronološki u pozadini, a prikazat ćemo sortirano u Treeview ili sort po zadanoj koloni
         prikaz = []
         
         for s in self.stavke:
             t = "Smještaj" if isinstance(s, Smjestaj) else "Aktivnost"
-            if filt == "Sve" or (filt == "Smještaj" and t == "Smještaj") or (filt == "Aktivnost" and t == "Aktivnost"):
-                prikaz.append(s)
+            # primijeni radiobutton filter
+            if not (filt == "Sve" or (filt == "Smještaj" and t == "Smještaj") or (filt == "Aktivnost" and t == "Aktivnost")):
+                continue
+            # pretraga po lokaciji (substring)
+            if search_text:
+                if search_text not in s.lokacija.lower():
+                    continue
+            prikaz.append(s)
                 
+        # zadano kronološki po sortiranje_datum
         prikaz.sort(key=lambda x: x.sortiranje_datum())
+
+        # Ako imamo aktivno sortiranje na stupcu, napravit ćemo sortiranje prema tome
+        if self.tree_sort_column:
+            col = self.tree_sort_column
+            reverse = self.tree_sort_reverse
+            # custom sort za pojedine stupce
+            def sortkey(obj):
+                if col == "datum":
+                    return obj.sortiranje_datum()
+                elif col == "tip":
+                    return "0" if isinstance(obj, Smjestaj) else "1"
+                elif col == "naziv":
+                    return obj.naziv.lower()
+                elif col == "lokacija":
+                    return obj.lokacija.lower()
+                elif col == "cijena":
+                    if isinstance(obj, Smjestaj):
+                        return obj.ukupni_trosak
+                    else:
+                        return obj.cijena
+                return obj.sortiranje_datum()
+            prikaz.sort(key=sortkey, reverse=reverse)
 
         # pohrani trenutno prikazane objekte za kasnija mapiranja (odabir/edit/brisanje)
         self.prikaz_stavki = prikaz.copy()
-        
+
+        # očisti mapu iid->obj te ubaci zapis u tree koristeći stabilni iid (id(obj))
+        self.prikaz_map = {}
         for s in prikaz:
             if isinstance(s, Smjestaj):
-                line = f"[Smještaj] {s.datum_dolaska.isoformat()} → {s.datum_odlaska.isoformat()} | {s.naziv} | {s.lokacija} | {s.ukupni_trosak:.2f} €"
+                datum_str = f"{s.datum_dolaska.isoformat()} → {s.datum_odlaska.isoformat()}"
+                tip_str = "Smještaj"
+                cijena_str = f"{s.ukupni_trosak:.2f} €"
+                tag = "smjestaj"
             else:
-                line = f"[Aktivnost] {s.datum.isoformat()} {s.vrijeme} | {s.naziv} | {s.lokacija} | {s.cijena:.2f} €"
-            self.listbox.insert(tk.END, line)
+                datum_str = f"{s.datum.isoformat()} {s.vrijeme}"
+                tip_str = "Aktivnost"
+                cijena_str = f"{s.cijena:.2f} €"
+                tag = "aktivnost"
+
+            iid = str(id(s))
+            self.prikaz_map[iid] = s
+            self.tree.insert("", "end", iid=iid, values=(datum_str, tip_str, s.naziv, s.lokacija, cijena_str), tags=(tag,))
 
         #statusna traka: broj stavki, ukupni trošak, ukupno noćenja
         ukupni_trosak = sum((s.ukupni_trosak for s in self.stavke if isinstance(s, Smjestaj)), 0.0) + sum((s.cijena for s in self.stavke if isinstance(s, Aktivnost)), 0.0)
         ukupno_nocenja = sum((s.broj_nocenja() for s in self.stavke if isinstance(s, Smjestaj)), 0)
         self.status_set(f"Stavki: {len(self.stavke)} | Ukupni trošak: {ukupni_trosak:.2f} € | Noćenja: {ukupno_nocenja}")
 
-    #prikaži detalje
-    def prikazi_detalje(self, event=None):
-        sel = self.listbox.curselection()
+    # sortiranje Treeview prema stupcu
+    def tree_sort_by(self, column):
+        # preokreni ako je isti stupac
+        if self.tree_sort_column == column:
+            self.tree_sort_reverse = not self.tree_sort_reverse
+        else:
+            self.tree_sort_column = column
+            self.tree_sort_reverse = False
+        self.update_listbox()
 
+    #prikaži detalje (za Treeview) - otvara Toplevel umjesto messageboxa
+    def prikazi_detalje_tree(self, event=None):
+        sel = self.tree.selection()
         if not sel:
             messagebox.showinfo("Info", "Odaberite stavku za prikaz detalja.")
             return
-
-        # koristimo mapu prikzanih stavki umjesto ponovnog filtriranja/sortiranja
-        idx = sel[0]
+        iid = sel[0]
         try:
-            obj = self.prikaz_stavki[idx]
-        except (IndexError, AttributeError):
+            obj = self.prikaz_map[iid]
+        except Exception:
             messagebox.showerror("Greška", "Neispravan odabir stavke.")
             return
 
+        # Toplevel prozor s detaljima (formatirano)
+        det = tk.Toplevel(self)
+        det.title("Detalji stavke")
+        det.transient(self)
+        det.resizable(False, False)
+        try:
+            det.geometry("400x260")
+        except Exception:
+            pass
+
+        # naslov
         if isinstance(obj, Smjestaj):
-            tekst = (f"Smještaj: {obj.naziv}\nLokacija: {obj.lokacija}\n"
-                     f"Datum dolaska: {obj.datum_dolaska.isoformat()}\nDatum odlaska: {obj.datum_odlaska.isoformat()}\n"
-                     f"Broj noćenja: {obj.broj_nocenja()}\nUkupni trošak: {obj.ukupni_trosak:.2f} €")
+            naslov = f"Smještaj: {obj.naziv}"
+            detalji = (f"Lokacija: {obj.lokacija}\n"
+                      f"Datum dolaska: {obj.datum_dolaska.isoformat()}\n"
+                      f"Datum odlaska: {obj.datum_odlaska.isoformat()}\n"
+                      f"Broj noćenja: {obj.broj_nocenja()}\n"
+                      f"Ukupni trošak: {obj.ukupni_trosak:.2f} €")
         else:
-            tekst = (f"Aktivnost: {obj.naziv}\nLokacija: {obj.lokacija}\n"
-                     f"Datum: {obj.datum.isoformat()}\nVrijeme: {obj.vrijeme}\nCijena: {obj.cijena:.2f} €\nNapomena: {obj.napomena}")
-        messagebox.showinfo("Detalji stavke", tekst)
+            naslov = f"Aktivnost: {obj.naziv}"
+            detalji = (f"Lokacija: {obj.lokacija}\n"
+                      f"Datum: {obj.datum.isoformat()}\n"
+                      f"Vrijeme: {obj.vrijeme}\n"
+                      f"Cijena: {obj.cijena:.2f} €\n"
+                      f"Napomena: {obj.napomena}")
+
+        label_naslov = tk.Label(det, text=naslov, font=("Segoe UI", 12, "bold"))
+        label_naslov.pack(pady=(10,6))
+        txt = tk.Text(det, width=48, height=8, wrap="word")
+        txt.insert("1.0", detalji)
+        txt.config(state="disabled")
+        txt.pack(padx=8)
+        btn_close = tk.Button(det, text="Zatvori", command=det.destroy)
+        btn_close.pack(pady=8)
 
     #brisanje odabrane stavke
     def obrisi_odabrano(self):
-        sel = self.listbox.curselection()
+        sel = self.tree.selection()
         
         if not sel:
             messagebox.showinfo("Info", "Odaberite stavku za brisanje.")
             return
         
-        idx = sel[0]
+        iid = sel[0]
         try:
-            obj = self.prikaz_stavki[idx]
-        except (IndexError, AttributeError):
+            obj = self.prikaz_map[iid]
+        except Exception:
             messagebox.showerror("Greška", "Neispravan odabir stavke.")
             return
         
@@ -435,16 +554,16 @@ class PlanerApp(tk.Tk):
 
     #učitavanje u entry polja     
     def ucitaj(self):
-        sel = self.listbox.curselection()
+        sel = self.tree.selection()
         
         if not sel:
             messagebox.showinfo("Info", "Odaberite stavku za uređivanje.")
             return
 
-        idx = sel[0]
+        iid = sel[0]
         try:
-            self.odabrani_obj = self.prikaz_stavki[idx]
-        except (IndexError, AttributeError):
+            self.odabrani_obj = self.prikaz_map[iid]
+        except Exception:
             messagebox.showerror("Greška", "Neispravan odabir stavke.")
             return
         obj = self.odabrani_obj
@@ -527,7 +646,6 @@ class PlanerApp(tk.Tk):
             if self.odabrani_obj in self.stavke:
                 i = self.stavke.index(self.odabrani_obj)
                 self.stavke[i] = novi
-                # resetiramo odabrani_obj kako bi se spriječile buduće greške
                 self.odabrani_obj = None
             else:
                 messagebox.showerror("Greška", "Stavka više ne postoji u listi.")
@@ -552,8 +670,6 @@ class PlanerApp(tk.Tk):
 
         self.tip.set("Smještaj")
         self.promijeni_polja()
-
-
 
 # 4. Podatci - XML
 
@@ -665,6 +781,137 @@ class PlanerApp(tk.Tk):
         tk.Label(about, text="Kratki opis:\nPlaner putovanja za unos smještaja i aktivnosti.", justify=tk.CENTER).pack(pady=8)
         close = tk.Button(about, text="Zatvori", command=about.destroy)
         close.pack(pady=8)
+
+    # novi prozor: Analitika troškova
+    def analitika_troskova_prozor(self):
+        # kreiraj modalni prozor s karticama
+        anal = tk.Toplevel(self)
+        anal.title("Analitika troškova")
+        anal.transient(self)
+        anal.geometry("700x460")
+        anal.resizable(True, True)
+
+        nb = ttk.Notebook(anal)
+        nb.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        # 1) Ukupni troškovi po lokaciji
+        frame1 = tk.Frame(nb, bg=self.bg_color)
+        nb.add(frame1, text="Ukupno po lokaciji")
+
+        lbl1 = tk.Label(frame1, text="Ukupni troškovi po lokaciji (€):", font=("Segoe UI", 11, "bold"), bg=self.panel_color, fg=self.text_color)
+        lbl1.pack(anchor="w", pady=(6,2), padx=8)
+
+        tree_loc = ttk.Treeview(frame1, columns=("lokacija", "trosak"), show="headings")
+        tree_loc.heading("lokacija", text="Lokacija")
+        tree_loc.heading("trosak", text="Ukupni trošak (€)")
+        tree_loc.column("lokacija", width=350, anchor="w")
+        tree_loc.column("trosak", width=150, anchor="e")
+        tree_loc.pack(fill=tk.BOTH, expand=True, padx=8, pady=6)
+
+        # 2) Prosječni dnevni trošak
+        frame2 = tk.Frame(nb, bg=self.bg_color)
+        nb.add(frame2, text="Prosječni dnevni trošak")
+
+        lbl2 = tk.Label(frame2, text="Prosječni dnevni trošak (svi troškovi / trajanje putovanja):", font=("Segoe UI", 11, "bold"), bg=self.panel_color, fg=self.text_color)
+        lbl2.pack(anchor="w", pady=(6,2), padx=8)
+
+        text_avg_daily = tk.Text(frame2, height=6, width=80, state="disabled")
+        text_avg_daily.pack(fill=tk.X, padx=8, pady=6)
+
+        # 3) Trošak po noćenju
+        frame3 = tk.Frame(nb, bg=self.bg_color)
+        nb.add(frame3, text="Trošak po noćenju")
+
+        lbl3 = tk.Label(frame3, text="Prosječni trošak po noćenju (ukupni trošak smještaja / broj noćenja):", font=("Segoe UI", 11, "bold"), bg=self.panel_color, fg=self.text_color)
+        lbl3.pack(anchor="w", pady=(6,2), padx=8)
+
+        text_per_night = tk.Text(frame3, height=6, width=80, state="disabled")
+        text_per_night.pack(fill=tk.X, padx=8, pady=6)
+
+        # ispunjavanje podataka
+        # Ukupni troškovi po lokaciji
+        totals = defaultdict(float)
+        for s in self.stavke:
+            if isinstance(s, Smjestaj):
+                totals[s.lokacija] += s.ukupni_trosak
+            else:
+                totals[s.lokacija] += s.cijena
+
+        # sort descending
+        totals_sorted = sorted(totals.items(), key=lambda x: x[1], reverse=True)
+        for lok, val in totals_sorted:
+            tree_loc.insert("", "end", values=(lok, f"{val:.2f}"))
+
+        # Prosječni dnevni trošak
+        ukupni_trosak = sum((s.ukupni_trosak for s in self.stavke if isinstance(s, Smjestaj)), 0.0) + sum((s.cijena for s in self.stavke if isinstance(s, Aktivnost)), 0.0)
+        # definirati opseg datuma: od min(datum_dolaska) do max(datum_odlaska) uključivo
+        svi_dolazci = [s.datum_dolaska for s in self.stavke if isinstance(s, Smjestaj)]
+        svi_odlasci = [s.datum_odlaska for s in self.stavke if isinstance(s, Smjestaj)]
+        if svi_dolazci and svi_odlasci:
+            min_d = min(svi_dolazci)
+            max_d = max(svi_odlasci)
+            # broj dana putovanja uključivo min->max (+1)
+            broj_dana = (max_d - min_d).days + 1
+            if broj_dana <= 0:
+                broj_dana = 1
+        else:
+            # ako nema smještaja, pokušaj koristiti datume aktivnosti (min datum aktivnosti, max datum aktivnosti)
+            aktivni_datumi = [s.datum for s in self.stavke if isinstance(s, Aktivnost)]
+            if aktivni_datumi:
+                min_d = min(aktivni_datumi)
+                max_d = max(aktivni_datumi)
+                broj_dana = (max_d - min_d).days + 1
+                if broj_dana <= 0:
+                    broj_dana = 1
+            else:
+                broj_dana = 1
+
+        avg_daily = ukupni_trosak / broj_dana if broj_dana else ukupni_trosak
+        text_avg_daily.config(state="normal")
+        text_avg_daily.delete("1.0", tk.END)
+        text_avg_daily.insert("1.0", f"Ukupni trošak: {ukupni_trosak:.2f} €\n")
+        text_avg_daily.insert(tk.END, f"Period (min -> max): {min_d.isoformat() if 'min_d' in locals() else 'N/A'} -> {max_d.isoformat() if 'max_d' in locals() else 'N/A'}\n")
+        text_avg_daily.insert(tk.END, f"Broj dana (približno): {broj_dana}\n")
+        text_avg_daily.insert(tk.END, f"Prosječni dnevni trošak: {avg_daily:.2f} €")
+        text_avg_daily.config(state="disabled")
+
+        # Trošak po noćenju
+        ukupni_smjestaj = sum((s.ukupni_trosak for s in self.stavke if isinstance(s, Smjestaj)), 0.0)
+        ukupno_nocenja = sum((s.broj_nocenja() for s in self.stavke if isinstance(s, Smjestaj)), 0)
+        if ukupno_nocenja > 0:
+            per_night = ukupni_smjestaj / ukupno_nocenja
+        else:
+            per_night = 0.0
+
+        text_per_night.config(state="normal")
+        text_per_night.delete("1.0", tk.END)
+        text_per_night.insert("1.0", f"Ukupni trošak smještaja: {ukupni_smjestaj:.2f} €\n")
+        text_per_night.insert(tk.END, f"Ukupno noćenja: {ukupno_nocenja}\n")
+        if ukupno_nocenja > 0:
+            text_per_night.insert(tk.END, f"Prosječni trošak po noćenju: {per_night:.2f} €")
+        else:
+            text_per_night.insert(tk.END, "Nije moguće izračunati (nema noćenja).")
+        text_per_night.config(state="disabled")
+
+    # metoda koja pita za spremanje pri izlazu i po potrebi sprema
+    def on_closing(self):
+        # ponudi korisniku opciju: Spremi / Ne spremi / Odustani
+        resp = messagebox.askyesnocancel("Spremi prije izlaza", "Želite li spremiti promjene prije izlaza?\nDa = Spremi i izađi\nNe = Izađi bez spremanja\nOdustani = ostani u aplikaciji")
+        if resp is None:
+            # odustani
+            return
+        if resp:
+            try:
+                self.save_xml()
+            except Exception as e:
+                # ako spremanje ne uspije, obavijesti i prekini izlaz
+                messagebox.showerror("Greška pri spremanju", f"Spremanje nije uspjelo: {e}")
+                return
+            # nakon spremanja, može se zatvoriti
+            self.destroy()
+        else:
+            # korisnik izabrao Ne -> izađi bez spremanja
+            self.destroy()
 
 #pokretanje aplikacije
 if __name__ == "__main__":
