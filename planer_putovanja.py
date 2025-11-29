@@ -1,5 +1,5 @@
-# 2. Planer putovanja (Naziv app: TravelBuddy) - ispravljena verzija (minimalni bugfix)
-# Napravio: Luka Šop (mali popravci od asistenta)
+# 2. Planer putovanja (Naziv app: TravelBuddy)
+# Napravio: Luka Šop
 
 #uvoz biblioteka
 import tkinter as tk
@@ -917,3 +917,4 @@ class PlanerApp(tk.Tk):
 if __name__ == "__main__":
     app = PlanerApp()
     app.mainloop()
+
